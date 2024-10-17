@@ -1,0 +1,1443 @@
+---
+title: "Non-inferiority Goat"
+date: " `r format(Sys.time(), '%d %B, %Y')` "
+output:
+  word_document:
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    fig_caption: true
+    number_sections: true
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    number_sections: true
+fontsize: 12pt
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+
+packages<-c("readxl", "nlme", "lme4","lmerTest","car","lattice","insight","performance",
+            "HLMdiag","ggplot2", "sjPlot","sjmisc","emmeans","multcomp","multcompView",
+            "lmtest", "rcompanion","MASS","blmeco", "knitr", "stargazer", "dplyr", "plyr",
+            "summarytools", "table1", "survival","survminer", "glmmTMB", "brglm2")
+
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg))
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+# Load packages
+ipak(packages)
+```
+
+
+```{r, include=FALSE}
+datahalf = read_excel("1Final Master Efficacy 8.26.24.xlsx", 
+                  sheet = "Half-level data", na = ".") 
+
+datagoat = read_excel("1Final Master Efficacy 8.26.24.xlsx", 
+                  sheet = "Goat-level data values", na = ".") 
+
+datapredry = read_excel("1Final Master Efficacy 8.26.24.xlsx", 
+                  sheet = "All DO cultures combined", na = ".") 
+
+#str(datahalf)
+#str(datagoat)
+```
+
+```{r, include=FALSE}
+datahalf$DoeID <- as.factor(datahalf$DoeID)
+datahalf$Farm <- as.factor(datahalf$Farm)
+datahalf$Treatment <- as.factor(datahalf$Treatment)
+datahalf$Treatment <- relevel(datahalf$Treatment, ref = "Control")
+datahalf$Half <- as.factor(datahalf$Half)
+
+datahalf$IMIatDO <- as.factor(datahalf$IMIatDO)
+datahalf$IMIatPF <- as.factor(datahalf$IMIatPF)
+datahalf$Cure <- as.factor(datahalf$Cure)
+datahalf$NewIMI <- as.factor(datahalf$NewIMI)
+
+#str(datahalf)
+
+datagoat$DoeID  <- as.factor(datagoat$DoeID)
+datagoat$Farm  <- as.factor(datagoat$Farm )
+datagoat$Treatment  <- as.factor(datagoat$Treatment)
+datagoat$Treatment <- relevel(datagoat$Treatment, ref = "Control")
+datagoat$Parity <- as.factor(datagoat$Parity)
+
+datagoat$MastitisEvent  <- as.factor(datagoat$MastitisEvent )
+datagoat$Death  <- as.factor(datagoat$Death)
+datagoat$Culling  <- as.factor(datagoat$Culling )
+datagoat$DeathCulling  <- as.factor(datagoat$DeathCulling )
+
+datagoat$SurvMastitis  <- as.numeric(datagoat$MastitisEvent)
+datagoat$SurvDeath  <- as.numeric(datagoat$Death)
+datagoat$SurvCulling  <- as.numeric(datagoat$Culling)
+datagoat$SurvDeathCulling  <- as.numeric(datagoat$DeathCulling )
+
+
+datapredry$Farm <- as.factor(datapredry$Farm)
+datapredry$CultureResult <- as.factor(datapredry$CultureResult)
+#str(datagoat)
+
+```
+
+# Data analysis - Quarter-level dynamics:
+
+## Descriptive statistics: 
+```{r, include=FALSE}
+Desc1 <- datahalf %>% subset(select=c( Farm,	DoeID,	Treatment,	Half,	IMIatDO,	IMIatPF,	Cure,	NewIMI )) 
+
+table1::table1(~ Farm +	Half + IMIatDO +	IMIatPF + Cure + NewIMI | Treatment, data=Desc1)
+
+```
+
+## Descriptive statistics - Culture Pre-dry:
+
+### Overall:
+```{r, echo=FALSE}
+
+table1::table1(~ CultureResult , data=datapredry)
+
+```
+
+### By Farm:
+```{r, echo=FALSE}
+
+table1::table1(~ CultureResult | Farm, data=datapredry)
+
+```
+
+
+## Descriptive statistics - Culture DO:
+
+### By Farm:
+
+```{r, echo=FALSE}
+
+table1::table1(~ DOResult | Farm, data=datahalf)
+
+```
+
+### By Treatment:
+
+```{r, echo=FALSE}
+
+table1::table1(~ DOResult | Treatment, data=datahalf)
+
+```
+
+### Treatment By Farm:
+
+```{r, echo=FALSE}
+
+table1::table1(~ DOResult | Treatment*Farm, data=datahalf)
+
+```
+
+
+## Descriptive statistics - Culture PF:
+
+### By Farm:
+
+```{r, echo=FALSE}
+
+table1::table1(~ PFResult	| Farm, data=datahalf)
+```
+
+### By Treatment:
+
+```{r, echo=FALSE}
+
+table1::table1(~ PFResult	| Treatment, data=datahalf)
+```
+
+### Treatment By Farm: 
+
+```{r, echo=FALSE}
+
+table1::table1(~ PFResult	| Treatment*Farm, data=datahalf)
+```
+
+
+## Model 1 - IMI at DO:
+
+Statistical model: generalized linear model (logistic regression)
+  
+  - Outcome: IMI at DO.
+  - Fixed effect: Treatment.
+  - Covariate: No covariates available.
+  - Random effects: None.
+    - Doe within farms were removed from random because little variation was explained adding it.
+
+**Model:**
+
+```{r , echo=FALSE}
+#model1 <- glmmTMB(as.numeric(IMIatDO) ~ Treatment + (1|Farm) , 
+#           family = poisson,
+#           data = datahalf)
+library(logistf)
+
+#model1 <- glm(IMIatDO ~ Treatment,  #+ (1| Farm), 
+#           family = binomial(link="logit"), 
+#           #control = glmerControl(optimizer = "bobyqa"),
+#           data = datahalf)
+#summary(model1)
+#print(model1, digits=3, corr=FALSE)
+#tab_model(model1)
+
+
+model1 <- logistf(IMIatDO ~ Treatment, data=datahalf)
+summary(model1)
+
+#model2 <- logistf(IMIatDO ~ Farm + Treatment, data=datahalf)
+#summary(model2)
+
+
+
+```
+
+
+**LS Means - Prabability (%):**
+
+```{r , echo=FALSE}
+
+marginal.bin = lsmeans(model1, ~ Treatment)
+
+emmeans(model1, "Treatment", type = "response")
+
+b <- cld(marginal.bin, alpha   = 0.05, Letters = letters,    
+    type    = "response", ### Report emmeans in orginal scale
+    #adjust =  "sidak",
+    decreasing = TRUE)
+
+options(digits=3)
+
+kable(b)
+```
+
+
+**LS Means - Prabability (%):**
+
+```{r , echo=FALSE}
+
+marginal.bin = lsmeans(model2, ~ Farm)
+
+emmeans(model2, "Farm", type = "response")
+
+b <- cld(marginal.bin, alpha   = 0.05, Letters = letters,    
+    type    = "response", ### Report emmeans in orginal scale
+    #adjust =  "sidak",
+    decreasing = TRUE)
+
+options(digits=3)
+
+kable(b)
+```
+
+
+**Differences between treatments:**
+
+```{r , echo=FALSE}
+
+betta = as.data.frame(pairs(marginal.bin, adjust="tukey"))
+
+kable(marginal.bin)
+kable(betta)
+
+```
+
+
+**LS Means - Plot:**
+
+```{r, echo=FALSE}
+ggplot(b,
+       aes(x     = Treatment,
+           y     = prob,
+           color = Treatment,
+           label = .group, 
+           ymax=1, ymin=0)) +
+    geom_point(shape  = 15, size   = 4) +
+    geom_errorbar(aes(ymin  =  lower.CL	,
+                      ymax  =  upper.CL),
+                      width =  0.2,
+                      size  =  0.7) +
+     theme(axis.title   = element_text(face = "bold"),
+          axis.text    = element_text(face = "bold"),
+          plot.caption = element_text(hjust = 0)) +
+    ylab("Probability, %")+
+    xlab("Treatment Group")+
+   scale_color_manual(values = c("#999999", "#000000","blue", "red" ))+
+  theme_bw() +
+  theme(legend.position="bottom")
+
+
+```
+
+
+**Estimate of risk and risk difference against the NT:**
+
+```{r}
+options(digits=5)
+
+### Odds ratio difference: NT - CLOX (Orbenin)
+table(datahalf$Treatment, datahalf$IMIatDO)
+
+pr1 = 1.0 
+n1 = 129 #Reference
+pr2 = 1.0 
+n2 = 136
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+(azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100))
+
+
+
+### Odds ratio difference: NT - CEPH (Tomorrow)
+table(datahalf$Treatment, datahalf$IMIatDO)
+
+pr1 = 1.0  
+n1 = 129 #Reference
+pr2 = 1.0 
+n2 = 138
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100)
+kable(azz) 
+
+
+### Odds ratio difference: NT - NC
+table(datahalf$Treatment, datahalf$IMIatDO)
+
+pr1 = 1.0  
+n1 = 129 #Reference
+pr2 = 0.003
+n2 = 175
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100)
+kable(azz) 
+```
+
+
+## Model 2 - IMI at PK:
+
+Statistical model: generalized linear mixed model (logistic regression)
+
+  - Outcome: IMIatPF.
+  - Fixed effect: Treatment.
+  - Covariate: IMI at D0 tested, but removed since was not significant.
+  - Random effects: Doe within Farms.
+
+**Regression**:
+
+```{r , echo=FALSE}
+
+model2 <- glmer(IMIatPF ~ Treatment   + (1| Farm/DoeID), 
+           family = binomial(link="logit"), 
+           control = glmerControl(optimizer = "bobyqa"),
+           data = datahalf)
+
+summary(model2)
+#print(model2, digits=3, corr=FALSE)
+#tab_model(model2)
+
+#library(broom.mixed)
+#tidy(model2,conf.int=TRUE,exponentiate=TRUE,effects="fixed")
+```
+
+**ANOVA:**
+```{r , echo=FALSE}
+model2aov<- Anova(model2, test="Chisq", type=3)
+options(digits=3)
+kable(as.data.frame(model2aov))
+```
+
+
+**LS Means - Probability (%):**
+
+```{r , echo=FALSE}
+marginal.bin = lsmeans(model2, ~ Treatment)
+b <- cld(marginal.bin, alpha   = 0.05, Letters = letters,    
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "sidak")
+
+abc <- data.frame(Treatment = b$Treatment, Probability = b$prob, SE = b$SE, 
+                  `Lower CI`= b$asymp.LCL, `Upper CI` = b$asymp.UCL, Group = b$.group)
+options(digits=3)
+kable(abc)
+```
+
+
+**Differences between treatments:**
+
+```{r , echo=FALSE}
+
+betta = as.data.frame(pairs(marginal.bin, adjust="tukey"))
+
+kable(marginal.bin)
+kable(betta)
+
+```
+
+
+**LS Means - plot:**
+
+```{r, echo=FALSE}
+ggplot(abc,
+       aes(x     = Treatment,
+           y     = Probability,
+           color = Treatment,
+           label = Group, 
+           ymax=1, ymin=0)) +
+    geom_point(shape  = 15,
+               size   = 4) +
+    geom_errorbar(aes(ymin  =  Lower.CI,
+                      ymax  =  Upper.CI),
+                      width =  0.2,
+                      size  =  0.7) +
+     theme(axis.title   = element_text(face = "bold"),
+          axis.text    = element_text(face = "bold"),
+          plot.caption = element_text(hjust = 0)) +
+    ylab("Probability, %")+
+    xlab("Treatment Group")+
+   scale_color_manual(values = c("#999999", "#000000", "blue", "red"))+
+  theme_bw() +
+  theme(legend.position="bottom")
+
+```
+
+
+**Estimate of risk and risk difference against the NT.**
+
+```{r}
+options(digits=5)
+
+### Odds ratio difference: NT - CLOX (Orbenin)
+table(datahalf$Treatment, datahalf$IMIatPF)
+
+pr1 = 0.692 
+n1 = 43 + 68 #Reference
+pr2 = 0.375
+n2 = 71 + 46
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+(azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100))
+
+
+
+### Odds ratio difference: NT - CEPH (Tomorrow)
+table(datahalf$Treatment, datahalf$IMIatPF)
+
+pr1 = 0.692 
+n1 = 43 + 68 #Reference
+pr2 = 0.404
+n2 = 77 + 53
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100)
+kable(azz) 
+
+
+### Odds ratio difference: NT - NC
+table(datahalf$Treatment, datahalf$IMIatPF)
+
+pr1 = 0.692 
+n1 = 43 + 68 #Reference
+pr2 = 0.354
+n2 = 96 + 52
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100)
+kable(azz) 
+```
+
+
+## Model 3 - Cure:
+
+
+### Model 3A: Generalized linear mixed model (logistic regression)
+ 
+  - Outcome: Cure.   
+  - Fixed effect: Treatment.
+  - Covariates: No covariates.
+  - Random effects: Farm was included, but removed due to no variation among farms.
+
+**Model:**
+```{r , echo=FALSE}
+model3 <- glm(Cure ~ Treatment  , 
+           family = binomial(link="logit"), 
+           #control = glmerControl(optimizer = "bobyqa"),
+           data = Desc1)
+summary(model3)
+#print(model3, digits=3, corr=FALSE)
+#tab_model(model3)
+
+```
+
+
+**ANOVA:**
+
+```{r , echo=FALSE}
+model3aov<- Anova(model3,  type=3)
+
+kable(as.data.frame(model3aov))
+```
+
+
+**LS Means - Probability (%):**
+
+```{r , echo=FALSE}
+marginal.bin = lsmeans(model3, ~ Treatment)
+b <- cld(marginal.bin, alpha   = 0.05, Letters = letters,    
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "sidak")
+
+abcd <- data.frame(Treatment = b$Treatment, Probability = b$prob, SE = b$SE, 
+                  `Lower CI`= b$asymp.LCL, `Upper CI` = b$asymp.UCL, Group = b$.group)
+kable(abcd)
+```
+
+
+**Differences between treatments:**
+
+```{r , echo=FALSE}
+
+betta = as.data.frame(pairs(marginal.bin, adjust="tukey"))
+
+kable(marginal.bin)
+kable(betta)
+
+```
+
+
+**LS Means - Plot --  plot:** 
+
+```{r, echo=FALSE}
+ggplot(abcd,
+       aes(x     = Treatment,
+           y     = Probability,
+           color = Treatment,
+           label = Group, 
+           ymax=1, ymin=0)) +
+    geom_point(shape  = 15,
+               size   = 4) +
+    geom_errorbar(aes(ymin  =  Lower.CI,
+                      ymax  =  Upper.CI),
+                      width =  0.2,
+                      size  =  0.7) +
+     theme(axis.title   = element_text(face = "bold"),
+          axis.text    = element_text(face = "bold"),
+          plot.caption = element_text(hjust = 0)) +
+    ylab("Probability, %")+
+    xlab("Treatment Group")+
+   scale_color_manual(values = c("#999999", "#000000", "blue", "red"))+
+  theme_bw() +
+  theme(legend.position="bottom")
+
+```
+
+
+**Estimate of risk and risk difference against NT:**
+
+```{r}
+options(digits=5)
+
+### Odds ratio difference: NT - CLOX (Orbenin)
+table(datahalf$Treatment, datahalf$Cure)
+
+pr1 = 0.541 
+n1 = 51 + 60 #Reference
+pr2 = 0.814
+n2 = 21 + 92
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+(azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100))
+
+
+
+### Odds ratio difference: NT - CEPH (Tomorrow)
+table(datahalf$Treatment, datahalf$IMIatPF)
+
+pr1 = 0.541 
+n1 = 51 + 60 #Reference
+pr2 = 0.854
+n2 = 19 + 111
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100)
+kable(azz) 
+
+```
+
+
+**Interpretation:**
+
+  - There is a difference between groups.
+
+
+## Model 4 - IMI risk:
+
+Statistical model: generalized linear mixed model (logistic regression)
+
+  - Outcome: NewIMI.
+  - Fixed effect: Treatment.
+  - Covariate: IMI at D0 and Parity tested as confounders, but removed due to non-significance.
+  - Random effects: Doe whitin Farms.
+
+
+**Model:**
+
+```{r , echo=FALSE}
+model4 <- glmer(NewIMI ~ Treatment  +  (1 | Farm/DoeID), 
+           family = binomial(link="logit"),
+           control = glmerControl(optimizer = "bobyqa"),
+           data = Desc1)
+summary(model4)
+#tab_model(model4)
+```
+
+
+**ANOVA:**
+
+```{r , echo=FALSE}
+model4aov<- Anova(model4, test="Chisq", type=3)
+
+kable(as.data.frame(model4aov))
+```
+
+
+**LS Means - Probability (%):**
+
+```{r , echo=FALSE}
+marginal.bin = lsmeans(model4, ~ Treatment)
+b <- cld(marginal.bin, alpha   = 0.05, Letters = letters,    
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "sidak")
+
+ac <- data.frame(Treatment = b$Treatment, Probability = b$prob, SE = b$SE, 
+                  `Lower CI`= b$asymp.LCL, `Upper CI` = b$asymp.UCL, Group = b$.group)
+kable(ac)
+```
+
+
+**Differences between treatments:**
+
+```{r , echo=FALSE}
+
+betta = as.data.frame(pairs(marginal.bin, adjust="tukey"))
+
+kable(marginal.bin)
+kable(betta)
+
+```
+
+
+**LS Means - Plot:**
+
+```{r, echo=FALSE}
+ggplot(ac,
+       aes(x     = Treatment,
+           y     = Probability,
+           color = Treatment,
+           label = Group, 
+           ymax=1, ymin=0)) +
+    geom_point(shape  = 15,
+               size   = 4) +
+    geom_errorbar(aes(ymin  =  Lower.CI,
+                      ymax  =  Upper.CI),
+                      width =  0.2,
+                      size  =  0.7) +
+     theme(axis.title   = element_text(face = "bold"),
+          axis.text    = element_text(face = "bold"),
+          plot.caption = element_text(hjust = 0)) +
+    ylab("Probability, %")+
+    xlab("Treatment Group")+
+   scale_color_manual(values = c("#999999", "#000000", "blue", "red"))+
+  theme_bw() +
+  theme(legend.position="bottom")
+
+```
+
+
+**Estimate of risk and risk difference against NT based on logistic regression.**
+
+```{r}
+options(digits=5)
+
+### Odds ratio difference: NT - CLOX (Orbenin)
+table(datahalf$Treatment, datahalf$NewIMI)
+
+pr1 = 0.32 
+n1 = 75 + 36 #Reference
+pr2 = 0.25
+n2 = 82 + 35
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100)
+kable(azz) 
+
+
+### Odds ratio difference: NT - CEPH (Tomorrow)
+table(datahalf$Treatment, datahalf$NewIMI)
+
+pr1 = 0.32 
+n1 = 75 + 36 #Reference
+pr2 = 0.27
+n2 = 90 + 40
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100)
+kable(azz) 
+
+### Odds ratio difference: NT - NC 
+table(datahalf$Treatment, datahalf$NewIMI)
+
+pr1 = 0.32 
+n1 = 75 + 36 #Reference
+pr2 = 0.352
+n2 = 97 + 52
+
+# Confidence Interval:  
+Lower = (pr1-pr2) - 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+Upper = (pr1-pr2) + 1.96 *(sqrt((pr1*(1-pr1)/n1) + (pr2*(1-pr2)/n2) ))
+
+azz <- data.frame(Risk_Difference =  (pr1-pr2)*100,
+                  Lower_CI =  Lower*100, 
+                  Upper_CI =  Upper*100)
+kable(azz) 
+
+```
+
+
+# Data analysis - Goat level
+
+## Descriptive statistics:
+
+### By Farm:
+
+```{r, echo=FALSE}
+
+Desc2 <- datagoat %>% subset(select=c(DoeID,	Farm,	Parity, Treatment, DaysDry, MastitisEvent,	Death,	Culling,	DeathCulling)) 
+
+table1::table1(~ DaysDry + Parity + MastitisEvent +	Death +	Culling +	DeathCulling  | Farm,
+               data=Desc2)
+```
+
+
+### By Treatment:
+
+```{r, echo=FALSE}
+
+table1::table1(~ DaysDry + MastitisEvent +	Parity + Death +	Culling +	DeathCulling  | Treatment,
+               data=Desc2)
+```
+
+
+### Treatment By Farm:
+
+```{r, echo=FALSE}
+
+table1::table1(~  DaysDry + MastitisEvent +	Parity+ Death +	Culling +	DeathCulling 
+               | Treatment*Farm,
+               data=Desc2)
+```
+
+
+## Risk/Odds of a mastitis event:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+library(summarytools)
+
+ctable(x = Desc2$Treatment, 
+       y = Desc2$MastitisEvent, useNA = "no", 
+       prop = "r")   # Show row proportions
+```
+
+**Interpretation:**
+  * Since there are no cases of mastitis, statistics cannot be computed.
+
+
+## Risk/Odds of Culling or Death:
+
+Statistical model: generalized linear mixed model (logistic regression)
+
+  - Outcome: Death or Culling.
+  - Fixed effect: Treatment.
+  - Covariates: covariates tested and removed if p-value > 0.5 or if there were no changes in the estimates. Parity was tested and removed.
+  - Random effects: Farm.
+
+**Model:**
+
+```{r , echo=FALSE}
+
+model6 <- glmer(DeathCulling ~ Treatment +
+                  (1 | Farm), 
+                family = binomial, control = glmerControl(optimizer = "bobyqa"),
+                data = Desc2)
+
+summary(model6)
+#print(model6, digits=3, corr=FALSE)
+#tab_model(model6
+
+```
+
+**ANOVA:**
+
+```{r , echo=FALSE}
+model6aov<- Anova(model6, test="Chisq", type=3)
+
+kable(as.data.frame(model6aov))
+```
+
+**LS Means - Probability (%):**
+
+```{r , echo=FALSE}
+marginal.bin = lsmeans(model6, ~ Treatment)
+b <- cld(marginal.bin, alpha   = 0.05, Letters = letters,    
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "sidak")
+
+abbc <- data.frame(Treatment = b$Treatment, Probability = b$prob, SE = b$SE, 
+                  `Lower CI`= b$asymp.LCL, `Upper CI` = b$asymp.UCL, Group = b$.group)
+kable(abbc)
+```
+
+**Betta and SE:**
+
+```{r , echo=FALSE}
+
+betta = as.data.frame(pairs(marginal.bin, adjust="tukey"))
+
+kable(marginal.bin)
+kable(betta)
+
+```
+
+**LS Means - Plot:**
+
+```{r, echo=FALSE}
+ggplot(abbc,
+       aes(x     = Treatment,
+           y     = Probability,
+           color = Treatment,
+           label = Group,
+           ymax=1, ymin=0)) +
+    geom_point(shape  = 15,
+               size   = 4) +
+    geom_errorbar(aes(ymin  =  Lower.CI,
+                      ymax  =  Upper.CI),
+                      width =  0.2,
+                      size  =  0.7) +
+     theme(axis.title   = element_text(face = "bold"),
+          axis.text    = element_text(face = "bold"),
+          plot.caption = element_text(hjust = 0)) +
+    ylab("Probability, %")+
+    xlab("Treatment Group")+
+   scale_color_manual(values = c("#999999", "#000000", "blue"))+
+  theme_bw()+
+  theme(legend.position="bottom")
+
+```
+
+
+# Models to assess time-to-event:
+
+```{r , echo=FALSE}
+# Load the data and remove NAs
+datasurv <- datagoat %>% subset(select=c(DoeID,	Farm,	Treatment, DaysDry, SurvMastitis, SurvDeath,	SurvCulling, SurvDeathCulling, DIMatevent)) 
+datasurv <- na.omit(datasurv)
+
+```
+
+
+## Descriptive statistics by treatment:
+
+```{r, echo=FALSE}
+
+table1::table1(~ DaysDry + as.factor(SurvMastitis) +	as.factor(SurvDeath) +	as.factor(SurvCulling) + as.factor(SurvDeathCulling) 
+               + DIMatevent  | Treatment,
+               data=datasurv)
+```
+
+
+## Model - Survival for Mastitis:
+
+  * Since there are no cases of mastitis, statistics cannot be computed.
+
+
+## Model - Survival for Culling or Death:
+
+Statistical model: cox regression model (time-to-event) - Culling or Death
+
+  - Outcome: Culling or Death
+  - Fixed effect: Treatment.
+ 
+
+```{r , echo=FALSE}
+# Kaplan
+fit3 <- survfit(Surv(DIMatevent, SurvDeathCulling) ~ Treatment, data = datasurv)
+print(fit3)
+ggsurvplot(fit3, data = datasurv) # Survival Plot
+
+## Log-rank
+surv_diff <- survdiff(Surv(DIMatevent, SurvDeathCulling) ~ Treatment, data = datasurv)
+surv_diff
+
+
+```
+
+**Survival PLot for Culling or Death.**
+
+```{r , echo=FALSE}
+## PLot with more information.
+(DeathCulling <- ggsurvplot(fit3, data = datasurv,
+ #surv.median.line = "hv", # Add medians survival
+
+ # Change legends: title & labels
+ #title = "Cullinging or Death",
+ legend = "bottom",
+
+ # Change font size, style and color at the same time
+ font.main = c(14, "bold"),
+ font.x = c(12, "bold"),
+ font.y = c(12, "bold"),
+ font.tickslab = c(12, "plain"),
+ 
+ # Add p-value and tervals
+ pval = TRUE,
+
+ conf.int = FALSE,
+ # Add risk table
+ #risk.table = TRUE,
+ #tables.height = 0.2,
+ #tables.theme = theme_cleantable(),
+
+ # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+ # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+ palette = c("#E7B800", "#2E9FDF", "green"),
+ ggtheme = theme_bw() # Change ggplot2 theme
+))
+```
+
+
+**Cox model - hazard ratio**:
+
+```{r , echo=FALSE}
+multi.cox <- coxph(Surv(DIMatevent, SurvDeathCulling) ~ Treatment , 
+                   cluster = Farm, data =  datasurv)
+summary(multi.cox)
+
+```
+
+
+
+
+# Statistical model for SCC and Milk Yield:
+
+```{r , echo=FALSE}
+data_SCCMilk = read_excel("1Final Master Efficacy 8.26.24.xlsx", 
+                  sheet = "Goat-level data values", na = ".") 
+data_SCCMilk$Treatment  <- as.factor(data_SCCMilk$Treatment)
+```
+
+
+## Descriptive statistics by treatment:
+
+```{r, echo=FALSE}
+
+table1::table1(~ SCCAtDryOff+	SCC1	+SCC2	+SCC3	+SCC4	+DryOffMilkYield	+ `MilkYield_1-30DIM`
+               + `MilkYield_31-60DIM` +	`MilkYield_61-90DIM` +	`MilkYield_91-120DIM` 
+               | Treatment,
+               data=data_SCCMilk)
+```
+
+
+## Somatic cell count (SCC) over Time:
+
+```{r , echo=FALSE}
+datascc = read_excel("1Final Master Efficacy 6.24.24.xlsx", 
+                  sheet = "SCC", na = ".") 
+
+datascc$Treatment  <- as.factor(datascc$Treatment)
+datascc$DoeID <- as.factor(datascc$DoeID)
+datascc$QTime <- as.numeric(datascc$Time)
+datascc$Time <- as.factor(datascc$Time)
+datascc$Farm <- as.factor(datascc$Farm)
+
+```
+
+Statistical model: repeated measures model
+
+  - Outcome: SCC
+  - Fixed effect: Treatment and Time.
+  - Covariates: covariates tested and removed if p-value > 0.5 or if there were no changes in the estimates.
+
+```{r , echo=FALSE}
+model2 <- lme(SCS ~ Treatment * Time,
+              random= ~1|DoeID,
+              correlation = corCompSymm(form = ~ QTime|DoeID),
+              data=datascc, na.action="na.omit")
+
+#summary(model2)
+print(model2, digits=3, corr=FALSE)
+#tab_model(model2)
+
+#plotNormalHistogram(residuals(model2))
+
+```
+
+
+**ANOVA:**
+
+```{r , echo=FALSE}
+options(digits=3)
+anova2 <- Anova(model2, type=3)
+kable(as.data.frame(anova2))
+```
+
+
+**LS Means: Interaction between Treatment and Time**
+
+```{r , echo=FALSE}
+marginal2<- lsmeans(model2, "Treatment", by="Time", data=datascc)
+#kable(marginal2)
+
+b2 <- cld(marginal2, alpha   = 0.05, Letters = letters,    ### Use lower-case letters for .group
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "sidak")
+
+abc2 <- data.frame(Time = b2$Time, Treatment = b2$Treatment, SCC = b2$lsmean, SEM = b2$SE,
+                  Group = b2$.group, lower.CL = b2$lower.CL, upper.CL = b2$upper.CL)
+options(digits=5)
+kable(abc2)
+```
+
+**LS Means: Interaction between Treatment**
+
+```{r , echo=FALSE}
+marginal2<- lsmeans(model2, "Treatment", data=datascc)
+#kable(marginal2)
+
+b2 <- cld(marginal2, alpha   = 0.05, Letters = letters,    ### Use lower-case letters for .group
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "Tukey")
+
+pairs(marginal2, adjust="tukey")
+
+kable(b2)
+
+```
+
+**Difference and 95% CI:**
+
+```{r , echo=FALSE}
+options(digits=7)
+
+marginal3<- lsmeans(model2, "Treatment", data=datascc)
+pairs(marginal3,  adjust="tukey")
+
+# contrast           estimate    SE  df t.ratio p.value
+# Control - Orbenin    0.1335 0.210 243   0.635  0.8008
+
+# NT - CLOX
+margin.error <- 0.210 * 0.635       # t.ratio*SE
+lower.bound <- -0.1335 - margin.error #estimate 
+upper.bound <- -0.1335 + margin.error
+print(c(lower.bound,upper.bound))
+
+
+# contrast           estimate    SE  df t.ratio p.value
+# Control - Tomorrow   0.1994 0.201 243   0.990  0.5837
+
+# NT - CEPH
+margin.error <- 0.201 * 0.990     # t.ratio*SE
+lower.bound <- -0.1994 - margin.error #estimate 
+upper.bound <- -0.1994 + margin.error
+print(c(lower.bound,upper.bound))
+
+
+
+
+```
+
+
+**LS Means: Interaction between Time**
+
+```{r , echo=FALSE}
+marginal2<- lsmeans(model2, "Time", data=datascc)
+#kable(marginal2)
+
+b2 <- cld(marginal2, alpha   = 0.05, Letters = letters,    ### Use lower-case letters for .group
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "Tukey")
+
+pairs(marginal2, adjust="tukey")
+
+kable(b2)
+
+```
+
+
+**LS Means - Plot 2:**
+
+```{r, echo=FALSE}
+
+(scc_bg <- ggplot(abc2, aes(x=Time , y=SCC, group=Treatment, color=Treatment)) +
+    geom_line(size=1.25, position=position_dodge(0.2)) +
+    geom_point(size=2, position=position_dodge(0.2))+
+    #scale_y_continuous(limits = c(0, 1))+
+    #scale_color_manual(values = c("#999999", "#000000"))+
+    geom_ribbon(aes(ymin = lower.CL, ymax = upper.CL), alpha = 0.10, color = NA)+ 
+    #ggtitle("Somatic cell count")+
+    ylab("SCC")+
+    xlab("DIM")+
+    scale_x_discrete(labels =c("1-30","31-60","61-90","91-120"))+
+    theme_bw()+ 
+    theme(legend.position="bottom")+
+    theme(plot.title = element_text(size = 14))+ 
+    theme(axis.title = element_text(size = 12))  +
+    theme(axis.title.x = element_text(size = 12)) +  
+    theme(axis.text.x = element_text(size = 12)) +
+    theme(axis.text.y = element_text(size = 12)) 
+)
+
+```
+
+
+## Milk Yield over Time:
+
+```{r , echo=FALSE}
+datamilk = read_excel("1Final Master Efficacy 8.26.24.xlsx", 
+                  sheet = "MilkYield", na = ".") 
+
+datamilk$Treatment  <- as.factor(datamilk$Treatment)
+datamilk$DoeID <- as.factor(datamilk$DoeID)
+datamilk$QTime <- as.numeric(datamilk$Time)
+datamilk$Time <- as.factor(datamilk$Time)
+datamilk$Farm <- as.factor(datamilk$Farm)
+
+```
+
+
+Statistical model: repeated measures model
+
+  - Outcome: Milk Yield
+  - Fixed effect: Treatment and Time.
+  - Covariates: covariates tested and removed if p-value > 0.5 or if there were no changes in the estimates.
+
+```{r , echo=FALSE}
+model2 <- lme(MilkYield ~ Treatment * Time,
+              random= ~1|DoeID/Farm,
+              correlation = corCompSymm(form = ~ QTime|DoeID),
+              data=datamilk, na.action="na.omit")
+
+#summary(model2)
+print(model2, digits=3, corr=FALSE)
+#tab_model(model2)
+
+#plotNormalHistogram(residuals(model2))
+```
+
+
+**ANOVA:**
+
+```{r , echo=FALSE}
+anova2 <- Anova(model2, type=3)
+kable(as.data.frame(anova2))
+```
+
+
+**LS Means:**
+
+```{r , echo=FALSE}
+marginal2<- lsmeans(model2, "Treatment", by="Time", data=datamilk)
+#kable(marginal2)
+
+b2 <- cld(marginal2, alpha   = 0.05, Letters = letters,    ### Use lower-case letters for .group
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "sidak")
+
+as.data.frame(pairs(marginal2, adjust="tukey"))
+
+abc2 <- data.frame(Time = b2$Time, Treatment = b2$Treatment, Yield = b2$lsmean, SEM = b2$SE,
+                  Group = b2$.group, lower.CL = b2$lower.CL, upper.CL = b2$upper.CL)
+options(digits=4)
+kable(abc2)
+```
+
+
+**LS Means - Plot 1:**
+
+```{r, echo=FALSE}
+
+ggplot(abc2,
+       aes(x     = Time,
+           y     = Yield,
+           color = Treatment,
+           label = Group)) +
+  geom_line() +
+    geom_point(shape  = 15,
+               size   = 4) +
+    geom_errorbar(aes(ymin  =  lower.CL,
+                      ymax  =  upper.CL),
+                      width =  0.2,
+                      size  =  0.7) +
+     theme(axis.title   = element_text(face = "bold"),
+          axis.text    = element_text(face = "bold"),
+          plot.caption = element_text(hjust = 0)) +
+    theme(legend.position="bottom")+
+    ylab("Milk Yield")+
+    xlab("Time")
+
+
+```
+
+**LS Means - Plot 2:**
+
+```{r, echo=FALSE}
+
+(scc_bg <- ggplot(abc2, aes(x=Time , y=Yield, group=Treatment, color=Treatment)) +
+    geom_line(size=1.25, position=position_dodge(0.2)) +
+    geom_point(size=2, position=position_dodge(0.2))+
+    #scale_y_continuous(limits = c(0, 1))+
+    #scale_color_manual(values = c("#999999", "#000000"))+
+    geom_ribbon(aes(ymin = lower.CL, ymax = upper.CL), alpha = 0.10, color = NA)+ 
+    #ggtitle("Somatic cell count")+
+    ylab("MilkYield (lbs/day)")+
+    xlab("DIM")+
+    scale_x_discrete(labels =c("1-30 DIM","31-60 DIM"," 61-90 DIM","91-120 DIM"))+
+    theme_bw()+ 
+    theme(legend.position="bottom")+
+    theme(plot.title = element_text(size = 14))+ 
+    theme(axis.title = element_text(size = 12))  +
+    theme(axis.title.x = element_text(size = 12)) +  
+    theme(axis.text.x = element_text(size = 12)) +
+    theme(axis.text.y = element_text(size = 12)) 
+)
+
+```
+
+**LS Means - Treatment difference:**
+
+```{r , echo=FALSE}
+marginal2<- lsmeans(model2, "Treatment", data=datascc)
+#kable(marginal2)
+
+b2 <- cld(marginal2, alpha   = 0.05, Letters = letters,    ### Use lower-case letters for .group
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "Tukey")
+
+kable(b2)
+
+```
+
+
+**LS Means - Treatment difference:**
+
+```{r}
+
+pairs(marginal2, adjust="tukey")
+
+
+# CEPH - NT
+margin.error <- -0.480 * 0.633
+lower.bound <- -0.3037 - margin.error
+upper.bound <- -0.3037 + margin.error
+print(c(lower.bound,upper.bound))
+
+# CLOX - NT
+margin.error <- -0.378 * 0.666
+lower.bound <- -0.2515 - margin.error
+upper.bound <- -0.2515 + margin.error
+print(c(lower.bound,upper.bound))
+```
+
+
+
+Statistical model: repeated measures model
+
+  - Outcome: MilkYieldKg
+  - Fixed effect: Treatment and Time.
+  - Covariates: covariates tested and removed if p-value > 0.5 or if there were no changes in the estimates.
+
+```{r , echo=FALSE}
+model2 <- lme(MilkYieldKg ~ Treatment * Time,
+              random= ~1|DoeID,
+              correlation = corCompSymm(form = ~ QTime|DoeID),
+              data=datamilk, na.action="na.omit")
+
+#summary(model2)
+print(model2, digits=3, corr=FALSE)
+#tab_model(model2)
+
+#plotNormalHistogram(residuals(model2))
+```
+
+
+**ANOVA:**
+
+```{r , echo=FALSE}
+anova2 <- Anova(model2, type=3)
+kable(as.data.frame(anova2))
+```
+
+
+**LS Means:**
+
+```{r , echo=FALSE}
+marginal2<- lsmeans(model2, "Treatment", by="Time", data=datamilk)
+#kable(marginal2)
+
+b2 <- cld(marginal2, alpha   = 0.05, Letters = letters,    ### Use lower-case letters for .group
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "sidak")
+
+as.data.frame(pairs(marginal2, adjust="tukey"))
+
+abc2 <- data.frame(Time = b2$Time, Treatment = b2$Treatment, Yield = b2$lsmean, SEM = b2$SE,
+                  Group = b2$.group, lower.CL = b2$lower.CL, upper.CL = b2$upper.CL)
+options(digits=4)
+kable(abc2)
+```
+
+
+**LS Means - Plot 1:**
+
+```{r, echo=FALSE}
+
+ggplot(abc2,
+       aes(x     = Time,
+           y     = Yield,
+           color = Treatment,
+           label = Group)) +
+  geom_line() +
+    geom_point(shape  = 15,
+               size   = 4) +
+    geom_errorbar(aes(ymin  =  lower.CL,
+                      ymax  =  upper.CL),
+                      linewidth =  0.2,
+                      size  =  0.7) +
+     theme(axis.title   = element_text(face = "bold"),
+          axis.text    = element_text(face = "bold"),
+          plot.caption = element_text(hjust = 0)) +
+    theme(legend.position="bottom")+
+    ylab("Milk Yield")+
+    xlab("Time")
+
+
+```
+
+**LS Means - Plot 2:**
+
+```{r, echo=FALSE}
+
+(scc_bg <- ggplot(abc2, aes(x=Time , y=Yield, group=Treatment, color=Treatment)) +
+    geom_line(size=1.25, position=position_dodge(0.2)) +
+    geom_point(size=2, position=position_dodge(0.2))+
+    #scale_y_continuous(limits = c(0, 1))+
+    #scale_color_manual(values = c("#999999", "#000000"))+
+    geom_ribbon(aes(ymin = lower.CL, ymax = upper.CL), alpha = 0.10, color = NA)+ 
+    #ggtitle("Somatic cell count")+
+    ylab("MilkYield (kgs/day)")+
+    xlab("DIM")+
+    scale_x_discrete(labels =c("1-30 DIM","31-60 DIM"," 61-90 DIM","91-120 DIM"))+
+    theme_bw()+ 
+    theme(legend.position="bottom")+
+    theme(plot.title = element_text(size = 14))+ 
+    theme(axis.title = element_text(size = 12))  +
+    theme(axis.title.x = element_text(size = 12)) +  
+    theme(axis.text.x = element_text(size = 12)) +
+    theme(axis.text.y = element_text(size = 12)) 
+)
+
+```
+
+**LS Means - Treatment difference:**
+
+```{r , echo=FALSE}
+marginal2<- lsmeans(model2, "Treatment", data=datamilk)
+#kable(marginal2)
+
+b2 <- cld(marginal2, alpha   = 0.05, Letters = letters,    ### Use lower-case letters for .group
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "Tukey")
+
+kable(b2)
+
+```
+
+**LS Means - Treatment difference:**
+
+```{r , echo=FALSE}
+marginal2<- lsmeans(model2, Time, data=datamilk)
+#kable(marginal2)
+
+b2 <- cld(marginal2, alpha   = 0.05, Letters = letters,    ### Use lower-case letters for .group
+    type    = "response", ### Report emmeans in orginal scale
+    adjust =  "Tukey")
+
+kable(b2)
+
+```
+
+
